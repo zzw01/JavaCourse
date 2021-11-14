@@ -1,0 +1,77 @@
+对于不同 GC 和堆内存的总结：
+首先GC算法包括三种：1、标记复制；2、标记清除；3、标记清除整理
+GC实现策略主要有：
+１、串行GC：Serial GC
+该GC的特点是，young区（Eden区、S0、S1）和old区都是串行执行的，所以Serial GC的性能是很低的，而且不管增加CPU核数或者增大了堆内存依然提高不了性能，其中young区使用的GC算法是标记复制，
+old区使用的是标记清除整理算法，每次都会触发STW，STW的时间和存活对象的数量有关。
+
+２、并行GC
+并行GC主要指的是 Parallel GC 和 Parallel Old GC，还包括由Serial GC进化得到的ParNew GC，其中ParNew GC和Paraller GC都是young区的GC实现策略，GC算法都是标记复制，而且也都是并行处理，
+不同的是ParNew GC的侧重点是响应时间，Parallel GC侧重吞吐量，并且，PartNew GC一般是和CMS GC配合使用，Parallel GC是配合Parallel Old GC使用，剩下的ParallerOld GC是在old区使用的GC策略，
+算法是标记清除整理算法。我们说并行GC一般是指Parallel GC+ParallerOld GC组合，该GC策略是jdk 78的默认GC算法，具有高吞吐量的特点，当GC发生时，系统的全部资源都在处理GC，所以也存在STW，
+STW时间和存活对象有关，可以通过提高CPU核数和堆内存来提高性能。
+
+３、CMS GC
+该GC主要用于Old区的GC，也叫最大可能性的并发标记清除垃圾回收，常和ParNew GC配合使用。在并行GC的ParallerOld GC中，STW时间除了用于标记时间，还有一部分时间消耗在了内存碎片整理，
+所以CMS GC的优化点就在其算法标记清除算法，使用空闲的列表来替代空间碎片化的整理过程，并且只有在初始标记和最终标记的时候存在STW，其余GC过程都是可以并发处理的，保证业务处理的不间断性，
+侧重点是系统的响应时间，并发默认使用的是系统线程的１／４，也可以手动的设置，不过当堆内存特别大的时候，会在某些情况下会出现不可预测的停留时间。
+
+４、G1 GC
+
+该GC的配置参数非常多，所以使用起来非常灵活，G1 GC的设计目标：将STW的停顿时间和分布，变成可预期且可配置的，回收变成实时的，为此G1GC有一些独特的实现。
+
+首先G1 GC不再区分年轻代和老年代等区域，而是将整个堆内存划分为多个小块（默认是2048），小块中可以被指定为Eden survivor old，并且是不断变化的，这样划分后使得G1不必每次都去收集整理整个堆空间，
+
+每次处理只需要处理所有年轻代和部分老年代，而且遵循垃圾最多的小块被优先处理。
+
+注意事项：某些情况下G1触发Gull GC，G1 GC会退化使用Serial GC
+
+- 并发模式失败：增加堆内存，调整触发GC的百分比，增加GC线程数
+
+- 晋升失败：增加整个堆内存，增加预留内存，减少GC触发百分比，增加GC线程数
+
+- 巨型对象分配失败：增加堆内存，增加小块大小
+
+默认配置：
+
+-XX:G1NewSizePercent ：初始年轻代占整个堆空间的百分比，默认5%
+
+-XX:G1MaxNewSizePercen ：t年轻代最大占整个堆空间的百分比，默认60%
+
+-XX:G1HeapRegionSize ：设置每个小块的大小，单位M，需要是2幂次方，默认是整个堆内存的1/2000，如果该值设置过小，那么大对象就放不进去小块了
+
+-XX:ConcGCThreads  ：GC时的线程数量，默认是核心线程数的1/4
+
+-XX:+InitiatingHeapOccupancyPercent ： 触发GC的百分比，默认是堆空间的45%，也决定了老年代的回收时机
+
+-XX:G1HeapWastePercent ： 停止GC的百分比，默认是堆空间的5%
+
+-XX:+GCTimeRatio ： 设置业务和GC的时间比率，默认9，即最多10%的时间花在GC上，ParallelGC默认是99，即1%时间被用在GC上，因为并行GC是调用整个系统资源来完成的。
+
+-XX:MaxGCPauseMills ： 预期G1执行GC的STW时间，单位毫秒，默认200毫秒。
+
+5、ZGC
+配置：
+-XX:+UnlockExperimentalVMOptions
+解释：
+ZGC是JDK11作为实验性GC引入，JDK15才能全面支持使用。
+特点就是不管多大的对象，都能非常快的被回收掉，让GC带来的延迟降的非常低，保证在10ms之内，但是系统的吞吐量会相应下降15%左右
+
+6、Shenandoah GC
+配置：-XX:+UseShenandoahGC
+解释：
+红帽团队开发的，立项比ZGC还早，特性和ZGC一样，但是不保证GC时间在10ms内，也是需要在jdk15才能使用。
+
+GC 特性总结
+Serial GC ：单线程，STW时间长，几乎不用
+并行GC（ParNew 、Parallel Scavenge、Parallel Old）：多线程并行，STW比较短，ParNew关注响应速度，其余关注系统吞吐量
+CMS GC：多线程并发，STW短，关注响应速度
+G1 GC：多线程并发，STW短，进一步低延迟，也就是响应速度
+ZGC：多线程并发，超低延迟，不限制对象大小
+Shenandoah：G1改进版，跟ZGC类似
+
+常用的GC策略组合和选择
+1、Serial +Serial Old 实现单线程的低延迟GC
+2、ParNew + CMS 实现多线程的低延迟GC
+3、Parallel Scavenge + Parallel Scavenge Old 实现多线程的高吞吐量GC
+4、G1 实现多线程低延迟的GC，如果是一般4G以上的内存，使用G1性价比比较高，内存越大，使用G1越好
